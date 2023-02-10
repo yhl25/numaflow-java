@@ -2,9 +2,11 @@ package io.numaproj.numaflow.function;
 
 import akka.actor.ActorRef;
 import akka.actor.ActorSystem;
+import akka.actor.PoisonPill;
 import akka.dispatch.Futures;
 import akka.dispatch.OnComplete;
 import akka.pattern.Patterns;
+import com.google.common.annotations.VisibleForTesting;
 import com.google.protobuf.ByteString;
 import com.google.protobuf.Empty;
 import io.grpc.stub.StreamObserver;
@@ -27,7 +29,6 @@ import scala.concurrent.Future;
 import scala.concurrent.duration.Duration;
 
 import java.time.Instant;
-import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeoutException;
@@ -39,7 +40,8 @@ import static io.numaproj.numaflow.function.v1.UserDefinedFunctionGrpc.getReduce
 @NoArgsConstructor
 public class FunctionService extends UserDefinedFunctionGrpc.UserDefinedFunctionImplBase {
 
-    public static final ActorSystem actorSystem = ActorSystem.create("test-system");
+    public static final ActorSystem actorSystem = ActorSystem.create("reduce");
+
     public static String EOF = "EOF";
 
     private MapHandler mapHandler;
@@ -57,6 +59,9 @@ public class FunctionService extends UserDefinedFunctionGrpc.UserDefinedFunction
     public void setReduceHandler(Class<? extends GroupBy> groupBy) {
         this.groupBy = groupBy;
     }
+
+    @VisibleForTesting
+
 
     /**
      * Applies a function to each datum element.
@@ -152,22 +157,23 @@ public class FunctionService extends UserDefinedFunctionGrpc.UserDefinedFunction
         IntervalWindow iw = new IntervalWindowImpl(startTime, endTime);
         Metadata md = new MetadataImpl(iw);
 
-        ActorRef shutdownActorRef = actorSystem.
-                actorOf(ShutdownActor.props(responseObserver));
-
+        /*
+            create a supervisor actor which assign the tasks to child actors.
+            we create a child actor for every key in a window.
+        */
         ActorRef parentActorRef = actorSystem
-                .actorOf(ReduceSupervisorActor.props(groupBy, md, shutdownActorRef));
+                .actorOf(ReduceSupervisorActor.props(groupBy, md, responseObserver));
 
-
-        List<scala.concurrent.Future<Object>> results = new ArrayList<>();
 
         return new StreamObserver<Udfunction.Datum>() {
             @Override
             public void onNext(Udfunction.Datum datum) {
+
+                // send the message to parent actor, which takes care of distribution.
                 if (!parentActorRef.isTerminated()) {
                     parentActorRef.tell(datum, parentActorRef);
                 } else {
-                    responseObserver.onError(new Throwable("Actor system was terminated"));
+                    responseObserver.onError(new Throwable("Supervisor actor was terminated"));
                 }
             }
 
@@ -178,9 +184,9 @@ public class FunctionService extends UserDefinedFunctionGrpc.UserDefinedFunction
 
             @Override
             public void onCompleted() {
-                Udfunction.DatumList.Builder responseBuilder = Udfunction.DatumList.newBuilder();
-                Future<Object> resultFuture = Patterns.ask(parentActorRef, EOF, Integer.MAX_VALUE);
 
+                // Ask the parent to return the list of futures returned by child actors.
+                Future<Object> resultFuture = Patterns.ask(parentActorRef, EOF, Integer.MAX_VALUE);
 
                 List<Future<Object>> udfResultFutures;
                 try {
@@ -192,31 +198,12 @@ public class FunctionService extends UserDefinedFunctionGrpc.UserDefinedFunction
                     return;
                 }
 
-                Futures
-                        .sequence(udfResultFutures, actorSystem.dispatcher())
-                        .onComplete(new OnComplete<>() {
-                            @Override
-                            public void onComplete(
-                                    Throwable failure,
-                                    Iterable<Object> success) {
+                // kill the parent by sending a poison pill after getting the result.
+                parentActorRef.tell(PoisonPill.getInstance(), ActorRef.noSender());
 
-                                if (failure != null) {
-                                    log.error("error while getting output from actors - "
-                                            + failure.getMessage());
-                                    responseObserver.onError(failure);
-                                    return;
-                                }
+                extractResult(udfResultFutures, responseObserver);
 
-                                success.forEach(ele -> {
-                                    Udfunction.DatumList list = buildDatumListResponse((Message[]) ele);
-                                    responseBuilder.addAllElements(list.getElementsList());
-                                });
-                                Udfunction.DatumList response = responseBuilder.build();
-                                responseObserver.onNext(response);
 
-                                responseObserver.onCompleted();
-                            }
-                        }, actorSystem.dispatcher());
             }
         };
     }
@@ -255,5 +242,42 @@ public class FunctionService extends UserDefinedFunctionGrpc.UserDefinedFunction
                     .build());
         });
         return datumListBuilder.build();
+    }
+
+    /*
+        extracts and returns the result to the observer.
+     */
+    private void extractResult(List<Future<Object>> futureList, StreamObserver<Udfunction.DatumList> responseObserver) {
+        Udfunction.DatumList.Builder responseBuilder = Udfunction.DatumList.newBuilder();
+
+        // build the response when its completed.
+        Futures
+                .sequence(futureList, actorSystem.dispatcher())
+                .onComplete(new OnComplete<>() {
+                    @Override
+                    public void onComplete(
+                            Throwable failure,
+                            Iterable<Object> success) {
+
+                        // if there are any failures indicate it to the observer.
+                        if (failure != null) {
+                            log.error("error while getting output from actors - "
+                                    + failure.getMessage());
+
+                            responseObserver.onError(failure);
+                            return;
+                        }
+
+                        success.forEach(ele -> {
+                            Udfunction.DatumList list = buildDatumListResponse((Message[]) ele);
+                            responseBuilder.addAllElements(list.getElementsList());
+                        });
+                        Udfunction.DatumList response = responseBuilder.build();
+
+
+                        responseObserver.onNext(response);
+                        responseObserver.onCompleted();
+                    }
+                }, actorSystem.dispatcher());
     }
 }

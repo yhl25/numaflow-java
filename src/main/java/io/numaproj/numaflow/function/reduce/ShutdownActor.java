@@ -8,6 +8,10 @@ import io.numaproj.numaflow.function.FunctionService;
 import io.numaproj.numaflow.function.v1.Udfunction;
 import lombok.AllArgsConstructor;
 
+/**
+ * Shutdown actor, listens to exceptions and handles shutdown.
+ */
+
 @AllArgsConstructor
 public class ShutdownActor extends AbstractActor {
     private StreamObserver<Udfunction.DatumList> responseObserver;
@@ -15,6 +19,8 @@ public class ShutdownActor extends AbstractActor {
     public static Props props(StreamObserver<Udfunction.DatumList> responseObserver) {
         return Props.create(ShutdownActor.class, responseObserver);
     }
+
+
 
     @Override
     public Receive createReceive() {
@@ -25,7 +31,8 @@ public class ShutdownActor extends AbstractActor {
     }
 
     private void shutdown(Throwable throwable) {
+        System.out.println("shutdown was invoked");
         responseObserver.onError(throwable);
-        FunctionService.actorSystem.terminate();
+        throw new RuntimeException(throwable);
     }
 }

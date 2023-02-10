@@ -61,7 +61,7 @@ public class FunctionServerTest {
 
         server = new FunctionServer(
                 InProcessServerBuilder.forName(serverName).directExecutor(),
-                new GrpcServerConfig(Function.SOCKET_PATH, Function.DEFAULT_MESSAGE_SIZE));
+                new GrpcServerConfig("var/run/numaflow/test.sock", Function.DEFAULT_MESSAGE_SIZE));
 
         server
                 .registerMapper(new MapFunc(testMapFn))
@@ -166,15 +166,14 @@ public class FunctionServerTest {
         String expectedKey = reduceKey + REDUCE_PROCESSED_KEY_SUFFIX;
         // sum of first 10 numbers 1 to 10 -> 55
         ByteString expectedValue = ByteString.copyFromUtf8(String.valueOf(55));
-        while (outputStreamObserver.resultDatum == null) ;
+        while (outputStreamObserver.resultDatum == null) {
+            System.out.println("yoooo");
+        }
 
         assertEquals(1, outputStreamObserver.resultDatum.getElementsCount());
         assertEquals(expectedKey, outputStreamObserver.resultDatum.getElements(0).getKey());
-        System.out.println(new String(outputStreamObserver.resultDatum
-                .getElements(0)
-                .getValue()
-                .toByteArray()));
         assertEquals(expectedValue, outputStreamObserver.resultDatum.getElements(0).getValue());
+        System.out.println("yooo");
 
     }
 
