@@ -9,6 +9,7 @@ import akka.japi.pf.DeciderBuilder;
 import akka.japi.pf.ReceiveBuilder;
 import akka.pattern.Patterns;
 import com.google.common.base.Preconditions;
+import io.grpc.stub.StreamObserver;
 import io.numaproj.numaflow.function.Function;
 import io.numaproj.numaflow.function.FunctionService;
 import io.numaproj.numaflow.function.HandlerDatum;
@@ -36,23 +37,27 @@ public class ReduceSupervisorActor extends AbstractActor {
     private final ReducerFactory<? extends Reducer> reducerFactory;
     private final Metadata md;
     private final ActorRef shutdownActor;
+    private final StreamObserver<Udfunction.DatumList> responseObserver;
     private final Map<String, ActorRef> actorsMap = new HashMap<>();
     private final List<Future<Object>> results = new ArrayList<>();
 
     public ReduceSupervisorActor(
             ReducerFactory<? extends Reducer> reducerFactory,
             Metadata md,
-            ActorRef shutdownActor) {
-        this.reducerFactory = reducerFactory;
+            ActorRef shutdownActor,
+            StreamObserver<Udfunction.DatumList> responseObserver) {
+        this.groupBy = groupBy;
         this.md = md;
         this.shutdownActor = shutdownActor;
+        this.responseObserver = responseObserver;
     }
 
     public static Props props(
             ReducerFactory<? extends Reducer> reducerFactory,
             Metadata md,
-            ActorRef shutdownActor) {
-        return Props.create(ReduceSupervisorActor.class, reducerFactory, md, shutdownActor);
+            ActorRef shutdownActor,
+            StreamObserver<Udfunction.DatumList> responseObserver) {
+        return Props.create(ReduceSupervisorActor.class, reducerFactory, md, shutdownActor, responseObserver);
     }
 
     // if there is an uncaught exception stop in the supervisor actor, send a signal to shut down
@@ -81,6 +86,7 @@ public class ReduceSupervisorActor extends AbstractActor {
                 .create()
                 .match(Udfunction.Datum.class, this::invokeActors)
                 .match(String.class, this::sendEOF)
+                .match(ActorResponse.class, this::responseListener)
                 .build();
     }
 
@@ -91,7 +97,7 @@ public class ReduceSupervisorActor extends AbstractActor {
 
 
             ActorRef actorRef = getContext()
-                    .actorOf(ReduceActor.props(datum.getKey(), md, reducer));
+                    .actorOf(ReduceActor.props(g, datum.getKey()));
 
             actorsMap.put(datum.getKey(), actorRef);
         }
@@ -101,10 +107,17 @@ public class ReduceSupervisorActor extends AbstractActor {
 
     private void sendEOF(String EOF) {
         for (Map.Entry<String, ActorRef> entry : actorsMap.entrySet()) {
-            results.add(Patterns.ask(entry.getValue(), EOF, Integer.MAX_VALUE));
+            entry.getValue().tell(EOF, getSelf());
         }
-        actorsMap.clear();
-        getSender().tell(results, getSelf());
+    }
+
+    private void responseListener(ActorResponse actorResponse) {
+        responseObserver.onNext(actorResponse.getDatumList());
+        actorsMap.remove(actorResponse.getKey());
+        if (actorsMap.isEmpty()) {
+            responseObserver.onCompleted();
+            getContext().getSystem().stop(getSelf());
+        }
     }
 
     private HandlerDatum constructHandlerDatum(Udfunction.Datum datum) {
