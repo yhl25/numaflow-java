@@ -6,6 +6,7 @@ import akka.japi.pf.ReceiveBuilder;
 import com.google.protobuf.ByteString;
 import io.numaproj.numaflow.function.HandlerDatum;
 import io.numaproj.numaflow.function.Message;
+import io.numaproj.numaflow.function.metadata.Metadata;
 import io.numaproj.numaflow.function.v1.Udfunction;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -42,7 +43,7 @@ public class ReduceActor extends AbstractActor {
     }
 
     private void getResult(String eof) {
-        Message[] resultMessages = this.groupBy.getOutput();
+        Message[] resultMessages = this.groupBy.getOutput(key, md);
         getSender().tell(buildDatumListResponse(resultMessages), getSelf());
     }
 

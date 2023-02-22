@@ -46,7 +46,7 @@ public class ReduceSupervisorActor extends AbstractActor {
             Metadata md,
             ActorRef shutdownActor,
             StreamObserver<Udfunction.DatumList> responseObserver) {
-        this.groupBy = groupBy;
+        this.reducerFactory = reducerFactory;
         this.md = md;
         this.shutdownActor = shutdownActor;
         this.responseObserver = responseObserver;
@@ -95,9 +95,8 @@ public class ReduceSupervisorActor extends AbstractActor {
 
             Reducer reducer = reducerFactory.createReducer();
 
-
             ActorRef actorRef = getContext()
-                    .actorOf(ReduceActor.props(g, datum.getKey()));
+                    .actorOf(ReduceActor.props(datum.getKey(), md, reducer));
 
             actorsMap.put(datum.getKey(), actorRef);
         }
