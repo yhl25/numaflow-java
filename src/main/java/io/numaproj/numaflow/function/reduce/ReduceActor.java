@@ -44,6 +44,7 @@ public class ReduceActor extends AbstractActor {
 
     private void getResult(String eof) {
         Message[] resultMessages = this.groupBy.getOutput(key, md);
+        // send the result back to sender(parent actor)
         getSender().tell(buildDatumListResponse(resultMessages), getSelf());
     }
 

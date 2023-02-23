@@ -7,7 +7,6 @@ import akka.actor.Props;
 import akka.actor.SupervisorStrategy;
 import akka.japi.pf.DeciderBuilder;
 import akka.japi.pf.ReceiveBuilder;
-import akka.pattern.Patterns;
 import com.google.common.base.Preconditions;
 import io.grpc.stub.StreamObserver;
 import io.numaproj.numaflow.function.Function;
@@ -20,7 +19,6 @@ import scala.PartialFunction;
 import scala.collection.Iterable;
 import scala.concurrent.Future;
 
-import java.lang.reflect.InvocationTargetException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -70,7 +68,7 @@ public class ReduceSupervisorActor extends AbstractActor {
 
     @Override
     public SupervisorStrategy supervisorStrategy() {
-        return new ReduceSupervisorStratergy();
+        return new ReduceSupervisorStrategy();
     }
 
 
@@ -90,6 +88,11 @@ public class ReduceSupervisorActor extends AbstractActor {
                 .build();
     }
 
+    /*
+        based on key of the input message invoke the right actor
+        if there is no actor for an incoming key, create a new actor
+        track all the child actors using actors map
+     */
     private void invokeActors(Udfunction.Datum datum) {
         if (!actorsMap.containsKey(datum.getKey())) {
 
@@ -110,7 +113,15 @@ public class ReduceSupervisorActor extends AbstractActor {
         }
     }
 
+    // listen to child actors for the result.
     private void responseListener(ActorResponse actorResponse) {
+        /*
+            send the result back to the client
+            remove the child entry from the map after getting result.
+            if there are no entries in the map, that means processing is
+            done we can close the stream.
+         */
+
         responseObserver.onNext(actorResponse.getDatumList());
         actorsMap.remove(actorResponse.getKey());
         if (actorsMap.isEmpty()) {
@@ -135,7 +146,7 @@ public class ReduceSupervisorActor extends AbstractActor {
         actors will be restarted, but we want to escalate the exception and terminate
         the system.
     */
-    private final class ReduceSupervisorStratergy extends SupervisorStrategy {
+    private final class ReduceSupervisorStrategy extends SupervisorStrategy {
 
         @Override
         public PartialFunction<Throwable, Directive> decider() {
